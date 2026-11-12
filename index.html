@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Cetak Label">
+<title>Cetak Label</title>
+<style id="page"></style>
+<style>
+  /* Layout: bilah atas, kanvas label di tengah, panel elemen di kanan (di HP jadi satu kolom). */
+  /* Kertas label tetap putih dan teksnya tetap hitam di mode apa pun, karena yang dicetak harus begitu. */
+  :root {
+    color-scheme: light;
+    --bg: #eef1f5; --panel: #ffffff; --field: #ffffff; --text: #101828; --muted: #667085;
+    --line: #d0d5dd; --accent: #2563eb; --accent-ink: #ffffff; --danger: #b42318;
+    --dotted: #98a2b3; --shadow: rgba(0, 0, 0, 0.18);
+    --paper: #ffffff; --ink: #000000;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #0f172a; --panel: #1d2939; --field: #101828; --text: #f2f4f7; --muted: #98a2b3;
+      --line: #344054; --accent: #3b82f6; --accent-ink: #ffffff; --danger: #f97066;
+      --dotted: #667085; --shadow: rgba(0, 0, 0, 0.5);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0f172a; --panel: #1d2939; --field: #101828; --text: #f2f4f7; --muted: #98a2b3;
+    --line: #344054; --accent: #3b82f6; --accent-ink: #ffffff; --danger: #f97066;
+    --dotted: #667085; --shadow: rgba(0, 0, 0, 0.5);
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; font: 14px/1.4 system-ui, -apple-system, sans-serif; color: var(--text); background: var(--bg); -webkit-text-size-adjust: 100%; }
+  .app { display: flex; height: 100vh; height: 100dvh; }
+  main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .bar { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; padding-block: 10px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); background: var(--panel); border-bottom: 1px solid var(--line); }
+  .bar label { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .bar input[type=number] { width: 64px; }
+  #tpl { max-width: 100%; }
+  #view { flex: 1; min-height: 0; overflow: auto; padding-block: 24px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  #wrap { position: relative; }
+  .lbl { position: absolute; left: 0; top: 0; background: var(--paper); color: var(--ink); box-shadow: 0 2px 10px var(--shadow); transform-origin: 0 0; overflow: hidden; }
+  .el { position: absolute; display: flex; flex-direction: column; justify-content: center; overflow: hidden; cursor: move; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: none; outline: 1px dotted var(--dotted); }
+  .el.sel { outline: 2px solid var(--accent); }
+  .el .t { white-space: pre-line; line-height: 1.05; overflow-wrap: anywhere; color: var(--ink); }
+  .el .t svg { display: block; }
+  .rz { position: absolute; right: 0; bottom: 0; width: 4mm; height: 4mm; background: var(--accent); cursor: nwse-resize; display: none; }
+  .el.sel .rz { display: block; }
+  .lbl.frame::after { content: ""; position: absolute; inset: 0; border: 0.35mm solid var(--ink); pointer-events: none; }
+  aside { width: 300px; flex: none; background: var(--panel); border-left: 1px solid var(--line); padding-block: 14px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); overflow: auto; }
+  aside h3 { margin: 4px 0 8px; font-size: 15px; }
+  aside label { display: block; margin: 8px 0; }
+  aside textarea, aside input[type=number], aside select { width: 100%; margin-top: 3px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 6px 0 12px; }
+  input, select, textarea { font: inherit; color: var(--text); background: var(--field); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+  button { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+  button.pri { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  button.danger { color: var(--danger); border-color: var(--danger); width: 100%; }
+  .hint { color: var(--muted); font-size: 12.5px; }
+  #printArea { display: none; }
+  @media print {
+    .app { display: none; }
+    #printArea { display: block; }
+    #printArea .lbl { box-shadow: none; transform: none !important; }
+    #printArea .el { outline: none !important; }
+    #printArea .rz { display: none !important; }
+    /* isi hitam dan garis tepi harus ikut tercetak, walau opsi "Background graphics" di browser mati */
+    #printArea, #printArea * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+  @media (max-width: 800px) {
+    .app { flex-direction: column; height: auto; min-height: 100vh; min-height: 100dvh; }
+    aside { width: auto; border-left: 0; border-top: 1px solid var(--line); }
+    /* iPhone dan iPad memperbesar halaman saat kolom isian berhuruf di bawah 16px */
+    input, select, textarea, button { font-size: 16px; }
+    button { min-height: 40px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <main>
+    <div class="bar">
+      <select id="tpl"><option value="">Pilih template…</option></select>
+      <label>Lebar <input id="lw" type="number" min="5" step="0.5"> mm</label>
+      <label>Tinggi <input id="lh" type="number" min="5" step="0.5"> mm</label>
+      <label><input id="snap" type="checkbox"> Snap 1 mm</label>
+      <label><input id="frame" type="checkbox"> Garis tepi</label>
+      <label>Zoom <select id="zoom"><option value="auto">Otomatis</option><option value="2">200%</option><option value="3">300%</option><option value="4">400%</option></select></label>
+      <button id="add">+ Teks</button>
+      <button id="addqr">+ QR</button>
+      <button id="print" class="pri">Cetak</button>
+    </div>
+    <div id="view">
+      <div id="wrap"><div id="label" class="lbl"></div></div>
+    </div>
+  </main>
+  <aside>
+    <h3>Elemen</h3>
+    <p id="none" class="hint">Tap elemen untuk memilih. Seret untuk menggeser, kotak biru di pojok kanan-bawah untuk mengubah ukuran. Di keyboard: panah menggeser 0,5 mm (Shift = 1 mm), Delete menghapus, Esc membatalkan pilihan.</p>
+    <div id="form" hidden>
+      <label>Teks <textarea id="text" rows="3"></textarea></label>
+      <p id="qrHint" class="hint" hidden>QR: teks di atas adalah data yang dikodekan. Ukuran kotak mengikuti ukuran QR.</p>
+      <div class="row">
+        <label>Ukuran maks (pt) <input id="pt" type="number" min="4" max="200" step="1"></label>
+        <label><input id="bold" type="checkbox"> Tebal</label>
+      </div>
+      <label>Rata teks
+        <select id="align"><option value="left">Kiri</option><option value="center">Tengah</option><option value="right">Kanan</option></select>
+      </label>
+      <div class="row">
+        <label>Isi latar
+          <select id="fill"><option value="">Tanpa isi</option><option value="#000">Hitam</option><option value="#666">Abu-abu</option></select>
+        </label>
+        <label>Warna teks
+          <select id="color"><option value="#000">Hitam</option><option value="#fff">Putih</option></select>
+        </label>
+      </div>
+      <div class="row">
+        <label>X (mm) <input id="x" type="number" step="0.5"></label>
+        <label>Y (mm) <input id="y" type="number" step="0.5"></label>
+        <label>Lebar (mm) <input id="w" type="number" step="0.5"></label>
+        <label>Tinggi (mm) <input id="h" type="number" step="0.5"></label>
+      </div>
+      <p class="hint" style="margin: 10px 0 4px">Rapikan posisi terhadap label</p>
+      <div class="grid">
+        <button data-al="left">Kiri</button>
+        <button data-al="center">Tengah (H)</button>
+        <button data-al="right">Kanan</button>
+        <button data-al="top">Atas</button>
+        <button data-al="middle">Tengah (V)</button>
+        <button data-al="bottom">Bawah</button>
+      </div>
+      <button id="del" class="danger">Hapus elemen</button>
+    </div>
+    <p class="hint" style="margin-top: 18px">Di dialog cetak: <b>Margin</b> = Tidak ada, <b>Header dan footer</b> = mati, <b>Skala</b> = 100% (ukuran sebenarnya), pilih printer AIMO T02. Ukuran kertas harus sama dengan lebar × tinggi label.</p>
+  </aside>
+</div>
+<div id="printArea"></div>
+<script src="qr-core.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

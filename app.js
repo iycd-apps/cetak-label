@@ -230,6 +230,98 @@ function renderAll() {
   save();
 }
 
+// ---------- ekspor PNG hitam-putih untuk aplikasi printer (sekitar 203 dpi) ----------
+const PX_PER_MM = 8;                          // 8 px per mm, sekitar 203 dpi
+const PX_PER_PT = PX_PER_MM * 25.4 / 72;      // 1 pt = 2,82 px pada 203 dpi
+
+function lipatBaris(g, teks, lebar) {
+  const baris = [];
+  for (const paragraf of teks.split('\n')) {
+    let cur = '';
+    for (const kata of paragraf.split(' ')) {
+      const uji = cur ? cur + ' ' + kata : kata;
+      if (!cur || g.measureText(uji).width <= lebar) cur = uji;
+      else { baris.push(cur); cur = kata; }
+    }
+    baris.push(cur);
+  }
+  return baris;
+}
+
+function gambarTeks(g, el, x, y, w, h) {
+  let px = Math.min(el.pt, 200) * PX_PER_PT;   // mulai dari ukuran maks, lalu dikecilkan sampai muat
+  let baris;
+  for (;;) {
+    g.font = `${el.bold ? 'bold ' : ''}${px}px system-ui, sans-serif`;
+    baris = lipatBaris(g, el.text, w);
+    const lebarMaks = Math.max(0, ...baris.map(b => g.measureText(b).width));
+    if ((baris.length * px * 1.05 <= h && lebarMaks <= w) || px <= 3 * PX_PER_PT) break;
+    px *= 0.95;
+  }
+  const align = el.align || 'center';
+  g.fillStyle = el.color || '#000';
+  g.textBaseline = 'top';
+  g.textAlign = align;
+  const xx = align === 'left' ? x : align === 'right' ? x + w : x + w / 2;
+  let yy = y + (h - baris.length * px * 1.05) / 2;
+  for (const b of baris) { g.fillText(b, xx, yy); yy += px * 1.05; }
+}
+
+function gambarQr(g, teks, x, y, w, h) {
+  if (!teks) return;
+  let qr;
+  try { qr = QRCore.create(String(teks), { errorCorrectionLevel: 'M' }); } catch (e) { return; }
+  const n = qr.modules.size, q = 4, sisi = Math.min(w, h), sel = sisi / (n + 2 * q);
+  const ox = x + (w - sisi) / 2 + q * sel, oy = y + (h - sisi) / 2 + q * sel;
+  g.fillStyle = '#000';
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
+    if (qr.modules.get(r, c)) g.fillRect(ox + c * sel, oy + r * sel, sel + 0.5, sel + 0.5);
+  }
+}
+
+function kanvasLabel() {
+  const c = document.createElement('canvas');
+  c.width = Math.round(state.w * PX_PER_MM);
+  c.height = Math.round(state.h * PX_PER_MM);
+  const g = c.getContext('2d');
+  g.fillStyle = '#fff';
+  g.fillRect(0, 0, c.width, c.height);
+  for (const el of state.els) {
+    const x = el.x * PX_PER_MM, y = el.y * PX_PER_MM, w = el.w * PX_PER_MM, h = el.h * PX_PER_MM;
+    if (el.fill) { g.fillStyle = el.fill; g.fillRect(x, y, w, h); }
+    if (el.type === 'qr') gambarQr(g, el.text, x, y, w, h);
+    else gambarTeks(g, el, x, y, w, h);
+  }
+  if (state.frame) {
+    const lw = 0.35 * PX_PER_MM;
+    g.strokeStyle = '#000';
+    g.lineWidth = lw;
+    g.strokeRect(lw / 2, lw / 2, c.width - lw, c.height - lw);
+  }
+  // hitam-putih murni: printer termal hanya bisa mencetak titik hitam atau kosong
+  const img = g.getImageData(0, 0, c.width, c.height), d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    d[i] = d[i + 1] = d[i + 2] = lum < 128 ? 0 : 255;
+    d[i + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  return c;
+}
+
+function unduhPng() {
+  kanvasLabel().toBlob(blob => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `label-${state.w}x${state.h}mm.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }, 'image/png');
+}
+
 function onKey(e) {
   if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
   if (e.key === 'Escape') return select(null);
@@ -277,6 +369,7 @@ function init() {
   D.zoom.onchange = () => { state.zoom = D.zoom.value; renderAll(); };
   D.add.onclick = addText;
   D.addqr.onclick = addQr;
+  document.getElementById('png').onclick = unduhPng;
   D.print.onclick = () => {
     select(null);
     const c = D.label.cloneNode(true);   // cetak salinan bersih, tanpa handle dan outline

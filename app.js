@@ -38,9 +38,9 @@ const kabel = (id, rute, spek) => [
 // label alat gaya PH/lokasi produksi: kategori di pita hitam, ID besar, nama alat, dan pemilik
 const alat = (kategori, id, nama) => [
   { text: kategori, x: 0, y: 0, w: 50, h: 7, pt: 12, fill: '#000', color: '#fff' },
-  { text: id, x: 1, y: 8, w: 30, h: 10, pt: 20 },
-  { text: nama, x: 1, y: 18.5, w: 30, h: 5.5, pt: 9, bold: false },
-  { type: 'qr', text: id, x: 32, y: 7.5, w: 16.5, h: 16.5 },
+  { text: id, role: 'id', x: 1, y: 8, w: 30, h: 10, pt: 20 },
+  { text: nama, role: 'nama', x: 1, y: 18.5, w: 30, h: 5.5, pt: 9, bold: false },
+  { type: 'qr', role: 'id', text: id, x: 32, y: 7.5, w: 16.5, h: 16.5 },
   { text: 'PH: [nama]', x: 1, y: 24.5, w: 48, h: 4.5, pt: 6.5, bold: false },
 ];
 // template event: hanya nama yang umum untuk semua acara (Ngunduh Mantu dan nama kamera CAM tidak dipakai)
@@ -279,20 +279,20 @@ function gambarQr(g, teks, x, y, w, h) {
   }
 }
 
-function kanvasLabel() {
+function kanvasLabel(s = state) {
   const c = document.createElement('canvas');
-  c.width = Math.round(state.w * PX_PER_MM);
-  c.height = Math.round(state.h * PX_PER_MM);
+  c.width = Math.round(s.w * PX_PER_MM);
+  c.height = Math.round(s.h * PX_PER_MM);
   const g = c.getContext('2d');
   g.fillStyle = '#fff';
   g.fillRect(0, 0, c.width, c.height);
-  for (const el of state.els) {
+  for (const el of s.els) {
     const x = el.x * PX_PER_MM, y = el.y * PX_PER_MM, w = el.w * PX_PER_MM, h = el.h * PX_PER_MM;
     if (el.fill) { g.fillStyle = el.fill; g.fillRect(x, y, w, h); }
     if (el.type === 'qr') gambarQr(g, el.text, x, y, w, h);
     else gambarTeks(g, el, x, y, w, h);
   }
-  if (state.frame) {
+  if (s.frame) {
     const lw = 0.35 * PX_PER_MM;
     g.strokeStyle = '#000';
     g.lineWidth = lw;
@@ -320,6 +320,151 @@ function unduhPng() {
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   }, 'image/png');
+}
+
+// ---------- cetak langsung ke T02 lewat Web Bluetooth (Chrome/Edge; tidak di Safari/iPad) ----------
+const UUID_LAYANAN_T02 = '0000ff00-0000-1000-8000-00805f9b34fb';
+const UUID_TULIS_T02 = '0000ff02-0000-1000-8000-00805f9b34fb';
+const LEBAR_KEPALA_T02 = 384;  // 384 titik = 48 mm pada 203 dpi
+
+// piksel RGBA (hitam = R < 128) -> ESC @, lalu GS v 0 (48 byte per baris, bit 1 = hitam), lalu ESC d 3
+function perintahRaster(rgba, lebarPx, tinggiPx) {
+  const bpr = LEBAR_KEPALA_T02 / 8;
+  const out = new Uint8Array(10 + bpr * tinggiPx + 3);
+  out.set([0x1b, 0x40, 0x1d, 0x76, 0x30, 0x00, bpr, 0, tinggiPx & 0xff, tinggiPx >> 8], 0);
+  let p = 10;
+  for (let y = 0; y < tinggiPx; y++) {
+    for (let x = 0; x < bpr; x++) {
+      let b = 0;
+      for (let bit = 0; bit < 8; bit++) {
+        const kolom = x * 8 + bit;
+        if (kolom < lebarPx && rgba[(y * lebarPx + kolom) * 4] < 128) b |= 0x80 >> bit;
+      }
+      out[p++] = b;
+    }
+  }
+  out.set([0x1b, 0x64, 0x03], p);
+  return out;
+}
+
+// satu label -> bytes raster 48 mm (dikecilkan bila lebih lebar; sisi kanan diberi putih)
+function rasterLabel(s) {
+  const asal = kanvasLabel(s);
+  const skala = Math.min(1, LEBAR_KEPALA_T02 / asal.width);
+  const c = document.createElement('canvas');
+  c.width = LEBAR_KEPALA_T02;
+  c.height = Math.round(asal.height * skala);
+  const g = c.getContext('2d');
+  g.fillStyle = '#fff';
+  g.fillRect(0, 0, c.width, c.height);
+  g.imageSmoothingEnabled = false;
+  g.drawImage(asal, 0, 0, asal.width * skala, asal.height * skala);
+  return perintahRaster(g.getImageData(0, 0, c.width, c.height).data, c.width, c.height);
+}
+
+// kirim beberapa label berurutan dalam satu koneksi; tiap label diberi jeda agar printer selesai mencetak
+async function kirimKeT02(daftarRaster) {
+  if (!navigator.bluetooth) {
+    alert('Browser ini tidak mendukung Web Bluetooth. Pakai Chrome atau Edge di Mac atau Android.');
+    return;
+  }
+  let perangkat = null;
+  try {
+    perangkat = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [UUID_LAYANAN_T02] });
+    const server = await perangkat.gatt.connect();
+    const layanan = await server.getPrimaryService(UUID_LAYANAN_T02);
+    const karakteristik = await layanan.getCharacteristic(UUID_TULIS_T02);
+    for (const data of daftarRaster) {
+      for (let i = 0; i < data.length; i += 100) {
+        await karakteristik.writeValueWithoutResponse(data.slice(i, i + 100));
+        await new Promise(r => setTimeout(r, 25));
+      }
+      await new Promise(r => setTimeout(r, 1500));  // beri waktu printer mencetak sebelum label berikutnya
+    }
+  } catch (e) {
+    alert(`Gagal mencetak: ${e.name}: ${e.message}`);
+  } finally {
+    if (perangkat && perangkat.gatt.connected) perangkat.gatt.disconnect();
+  }
+}
+
+function cetakBluetooth() {
+  kirimKeT02([rasterLabel(state)]);
+}
+
+// ---------- cetak beruntun dan daftar CSV ----------
+// daftar ID beruntun, mis. KAM-01, KAM-02, ...
+function buatDaftarId(awalan, mulai, jumlah, digit) {
+  const hasil = [];
+  for (let i = 0; i < jumlah; i++) {
+    hasil.push((awalan ? awalan + '-' : '') + String(mulai + i).padStart(digit, '0'));
+  }
+  return hasil;
+}
+
+// salinan desain untuk satu baris: bagian ber-peran 'id' dan 'nama' diganti (QR ikut ID)
+function salinUntukBatch(s, id, nama) {
+  return {
+    w: s.w, h: s.h, frame: s.frame,
+    els: s.els.map(el => ({ ...el, text: el.role === 'id' ? id : el.role === 'nama' ? nama : el.text })),
+  };
+}
+
+// satu baris CSV; nilai yang berisi koma, kutip, atau baris baru diberi kutip ganda
+function csvBaris(nilai) {
+  return nilai.map(v => (/[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v)).join(',');
+}
+
+function bacaTabel() {
+  return [...document.querySelectorAll('#tabelBatch tbody tr')]
+    .map(tr => ({ id: tr.querySelector('.bid').value.trim(), nama: tr.querySelector('.bnama').value }))
+    .filter(b => b.id);
+}
+
+function buatTabel() {
+  const awalan = document.getElementById('bprefix').value.trim();
+  const mulai = +document.getElementById('bmulai').value || 1;
+  const jumlah = Math.min(200, +document.getElementById('bjumlah').value || 1);
+  const digit = +document.getElementById('bdigit').value || 2;
+  const namaAwal = (state.els.find(el => el.role === 'nama') || { text: '' }).text;
+  const tbody = document.querySelector('#tabelBatch tbody');
+  tbody.textContent = '';
+  for (const id of buatDaftarId(awalan, mulai, jumlah, digit)) {
+    const tr = document.createElement('tr');
+    const tdId = document.createElement('td');
+    const tdNama = document.createElement('td');
+    const inpId = document.createElement('input');
+    const inpNama = document.createElement('input');
+    inpId.className = 'bid';
+    inpId.value = id;
+    inpNama.className = 'bnama';
+    inpNama.value = namaAwal;
+    tdId.appendChild(inpId);
+    tdNama.appendChild(inpNama);
+    tr.append(tdId, tdNama);
+    tbody.appendChild(tr);
+  }
+}
+
+function unduhCsv() {
+  const baris = bacaTabel();
+  if (baris.length === 0) { alert('Daftar masih kosong. Klik Buat daftar dulu.'); return; }
+  // BOM di awal agar Excel membaca huruf Indonesia dengan benar
+  const teks = '﻿' + ['ID,Nama', ...baris.map(b => csvBaris([b.id, b.nama]))].join('\n') + '\n';
+  const url = URL.createObjectURL(new Blob([teks], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'daftar-label.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+function cetakBatchBluetooth() {
+  const baris = bacaTabel();
+  if (baris.length === 0) { alert('Daftar masih kosong. Klik Buat daftar dulu.'); return; }
+  kirimKeT02(baris.map(b => rasterLabel(salinUntukBatch(state, b.id, b.nama))));
 }
 
 function onKey(e) {
@@ -370,6 +515,10 @@ function init() {
   D.add.onclick = addText;
   D.addqr.onclick = addQr;
   document.getElementById('png').onclick = unduhPng;
+  document.getElementById('btcetak').onclick = cetakBluetooth;
+  document.getElementById('bbuat').onclick = buatTabel;
+  document.getElementById('bcetak').onclick = cetakBatchBluetooth;
+  document.getElementById('bcsv').onclick = unduhCsv;
   D.print.onclick = () => {
     select(null);
     const c = D.label.cloneNode(true);   // cetak salinan bersih, tanpa handle dan outline
@@ -407,5 +556,5 @@ function init() {
   renderAll();
 }
 
-if (typeof module !== 'undefined') module.exports = { snap, clamp, alignPos, newEl, elFrom, qrSvg, TEMPLATES };
+if (typeof module !== 'undefined') module.exports = { snap, clamp, alignPos, newEl, elFrom, qrSvg, perintahRaster, buatDaftarId, salinUntukBatch, csvBaris, TEMPLATES };
 else init();

@@ -61,6 +61,9 @@
   button.pri { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
   button.danger { color: var(--danger); border-color: var(--danger); width: 100%; }
   .hint { color: var(--muted); font-size: 12.5px; }
+  .tabel { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .tabel th, .tabel td { border-bottom: 1px solid var(--line); padding: 4px; text-align: left; }
+  .tabel input { width: 100%; margin: 0; }
   #printArea { display: none; }
   @media print {
     .app { display: none; }
@@ -94,6 +97,7 @@
       <button id="addqr">+ QR</button>
       <button id="png">Unduh PNG</button>
       <button id="print" class="pri">Cetak</button>
+      <button id="btcetak">Cetak Bluetooth</button>
     </div>
     <div id="view">
       <div id="wrap"><div id="label" class="lbl"></div></div>
@@ -137,6 +141,19 @@
       </div>
       <button id="del" class="danger">Hapus elemen</button>
     </div>
+    <details id="beruntun" style="margin-top: 18px">
+      <summary><b>Cetak beruntun / daftar</b></summary>
+      <div class="row" style="margin-top: 8px">
+        <label>Awalan <input id="bprefix" value="KAM"></label>
+        <label>Digit <input id="bdigit" type="number" min="1" max="4" value="2"></label>
+        <label>Mulai <input id="bmulai" type="number" min="1" value="1"></label>
+        <label>Jumlah <input id="bjumlah" type="number" min="1" max="200" value="10"></label>
+      </div>
+      <p><button id="bbuat">Buat daftar</button></p>
+      <table id="tabelBatch" class="tabel"><thead><tr><th>ID</th><th>Nama</th></tr></thead><tbody></tbody></table>
+      <p><button id="bcetak" class="pri">Cetak semua (Bluetooth)</button> <button id="bcsv">Unduh CSV</button></p>
+      <p class="hint">Isi tabel bisa diedit langsung. Desain yang tampil dipakai untuk semua baris, dan bagian ID serta nama diganti per baris. Untuk label lama, pilih ulang template Alat agar bagian ID dan nama terdeteksi.</p>
+    </details>
     <p class="hint" style="margin-top: 18px">Di dialog cetak: <b>Margin</b> = Tidak ada, <b>Header dan footer</b> = mati, <b>Skala</b> = 100% (ukuran sebenarnya), pilih printer AIMO T02. Ukuran kertas harus sama dengan lebar × tinggi label.</p>
   </aside>
 </div>
